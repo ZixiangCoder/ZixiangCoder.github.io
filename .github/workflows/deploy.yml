@@ -1,0 +1,79 @@
+name: Deploy to GitHub Pages
+
+# Template users: this deploys to YOUR GitHub Pages project site.
+# If your user site already uses a custom domain, project sites of the same
+# account cannot bind that domain — either host at username.github.io/<repo>
+# (keep `base` set) or give this repo its own subdomain.
+#
+# The live demo for this template is built inside the author's main site
+# workflow instead, so it only runs manually here.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run check
+
+      - name: Build site
+        run: npm run build
+
+      - name: Read base path from astro config
+        id: base
+        run: |
+          BASE=$(node --input-type=module -e "
+            const { default: config } = await import('./astro.config.mjs');
+            console.log(config.base ?? '');
+          ")
+          echo "path=$BASE" >> "$GITHUB_OUTPUT"
+
+      # GitHub Pages serves project sites under /<repo-name>/, but Astro writes
+      # static output to dist/ root even when `base` is set. Nest the output so
+      # URLs resolve. No-op when `base` is not set (domain-root deployments).
+      - name: Nest output under base path
+        if: steps.base.outputs.path != ''
+        env:
+          BASE: ${{ steps.base.outputs.path }}
+        run: |
+          mkdir -p "dist$BASE"
+          find dist -mindepth 1 -maxdepth 1 ! -name "${BASE#/}" -exec mv {} "dist$BASE/" \;
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
